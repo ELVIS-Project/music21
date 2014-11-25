@@ -47,6 +47,7 @@ import os
 import re
 import urllib
 import zipfile
+from subprocess import check_output, CalledProcessError
 
 __ALL__ = ['subConverters']
 
@@ -425,7 +426,11 @@ class Converter(object):
     
     def getFormatFromFileExtension(self, fp):
         '''
-        gets the format from a file extension.
+        Return a file's format based on its file extension. On POSIX-capable systems, the ``file``
+        command is used to ensure the file's MIME-type matches our expectations. This allows for
+        more consistent error messages when an unsupported (or invalid) file is given, and
+        significantly raises the level of difficulty required when using file imports as an attack
+        vector on a Web server running music21.
         
         >>> import os
         >>> fp = os.path.join(common.getSourceFilePath(), 'musedata', 'testZip.zip')
@@ -438,10 +443,64 @@ class Converter(object):
         useFormat = None
         if os.path.isdir(fp):
             useFormat = 'musedata'
+        elif 'posix' == os.name:
+            # Use the "file" program to get the file's mimetype, which allows more accurate guesses
+            # of the filetype.
+            try:
+                fileResult = check_output(['file', '--brief', '--mime-type', fp])
+            except (OSError, CalledProcessError):
+                # This means the "file" command wasn't found, or the return code was non-zero. We
+                # can just 'break' and fall back to the old-style check below.
+                fileResult = None
+
+            if six.PY3:
+                fileResult = fileResult.decode('utf-8', 'ignore')
+            fileResult = fileResult.strip()  # remove trailing newline
+            extension = fp.split('.')[-1]  # get file extension
+
+            if 'application/xml' == fileResult:
+                # MusicXML or MEI
+                if extension == 'mei':
+                    useFormat = 'mei'
+                elif extension == 'xml':
+                    useFormat = 'musicxml'
+            elif 'application/zip' == fileResult:
+                # compressed MusicXML, MuseData, or capella
+                if extension == 'mxl':
+                    useFormat = 'musicxml'
+                elif extension == 'capx':
+                    useFormat = 'capella'
+                elif extension == 'zip':  # close our eyes and hope
+                    useFormat = 'musedata'
+            elif 'text/plain' == fileResult:
+                # **kern, MuseData, NWCTXT, or abc
+                if extension == 'krn':
+                    useFormat = 'humdrum'
+                elif extension == 'md':
+                    useFormat = 'musedata'
+                elif extension == 'nwctxt':
+                    useFormat = 'noteworthytext'
+                elif extension == 'abc':
+                    useFormat = 'abc'
+            elif 'audio/midi' == fileResult:
+                # MIDI; since we have full detection already, we don't need to check file extension
+                useFormat = 'midi'
+            elif 'application/octet-stream' == fileResult:
+                # NoteWorthyComposer binary
+                if extension == 'nwc':
+                    useFormat = 'noteworthy'
+
+            # detection with "file" failed, so it's not a valid file(type)
+            if useFormat is None:
+                raise ConverterFileException('Cannot determine filetype for "{}" (MIMEtype is {}; extension is {})'.format(fp, fileResult, extension))
+
         else:
+            # we have to fall back to legacy filetype detection
+            environLocal.warn('Falling back to legacy filetype detection')
             useFormat = common.findFormatFile(fp)
             if useFormat is None:
-                raise ConverterFileException('cannot find a format extensions for: %s' % fp)
+                raise ConverterFileException('Cannot determine filetype for "{}"'.format(fp))
+
         return useFormat
     
     def parseFile(self, fp, number=None, format=None, forceSource=False, storePickle=True): # @ReservedAssignment
@@ -470,14 +529,14 @@ class Converter(object):
             except:
                 environLocal.warn("Could not parse pickle, %s ...rewriting" % fpPickle)
                 os.remove(fpPickle)
-                self.parseFileNoPickle(fp, number, format, forceSource)
+                self.parseFileNoPickle(fp, number, useFormat, forceSource)
 
             self.stream.filePath = fp
             self.stream.fileNumber = number
             self.stream.fileFormat = useFormat
         else:
             environLocal.printDebug("Loading original version")
-            self.parseFileNoPickle(fp, number, format, forceSource)
+            self.parseFileNoPickle(fp, number, useFormat, forceSource)
             if writePickle is True and fpPickle is not None and storePickle is True:
                 # save the stream to disk...
                 environLocal.printDebug("Freezing Pickle")
