@@ -17,6 +17,7 @@ parseData method that sets self.stream
 # Converters are associated classes; they are not subclasses, but most define a pareData() method, a parseFile() method, and a .stream attribute or property.
 import os
 import unittest
+from subprocess import check_output, CalledProcessError
 
 from music21.ext import six
 from music21 import common
@@ -80,12 +81,55 @@ class SubConverter(object):
         loading the file and putting the data into parseData then there is no need
         to do anything except set self.readBinary (True|False).
         '''
-        if self.readBinary is False:
-            with open(filePath) as f:
-                dataStream = f.read()
-        else:
+
+        if self.readBinary:
             with open(filePath, 'rb') as f:
                 dataStream = f.read()
+
+        elif 'posix' == os.name:
+            # With a POSIX system, we can use "file" to determine the encoding, and change import
+            # options accordingly.
+
+            # In Python 3 with a POSIX system, we can use "file" to determine the encoding and
+            # import it accordingly.
+            try:
+                encoding = check_output(['file', '--brief', '--mime-encoding', filePath])
+            except (OSError, CalledProcessError):
+                # This means the "file" command wasn't found, or the return code was non-zero. We
+                # can just set "encoding" to the fallback and hope for the best.
+                encoding = 'utf-8'
+
+            encoding = encoding.decode('utf-8', 'ignore')
+            encoding = encoding.strip()
+
+            if six.PY3:
+                with open(filePath, 'rt', encoding=encoding) as f:
+                    dataStream = f.read()
+            else:
+                with open(filePath, 'rt') as f:
+                    dataStream = f.read()
+                dataStream = unicode(dataStream, encoding=encoding)
+
+        elif six.PY3:
+            # In Python 3, without auto-detection of encoding; we'll try the two most likely
+            # encodings to work. (UTF-16 is outputted from the Sibelius-to-MEI exporter).
+            try:
+                with open(filePath, 'rt', encoding='utf-8') as f:
+                    dataStream = f.read()
+            except UnicodeDecodeError:
+                with open(filePath, 'rt', encoding='utf-16') as f:
+                    dataStream = f.read()
+
+        else:
+            # In Python 3, without auto-detection of encoding; we'll try the two most likely
+            # encodings to work. (UTF-16 is outputted from the Sibelius-to-MEI exporter).
+            with open(filePath) as f:
+                dataStream = f.read()
+            try:
+                dataStream = unicode(dataStream)
+            except UnicodeDecodeError:
+                dataStream = unicode(dataStream, encoding='utf16')
+
         self.parseData(dataStream, number)
         return self.stream
     
