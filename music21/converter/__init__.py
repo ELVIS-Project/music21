@@ -438,33 +438,33 @@ class Converter(object):
         >>> c.getFormatFromFileExtension(fp)
         'musedata'
         '''
+
+        # Try to import "python-magic," which helps with MIME type detection. If we can't use it,
+        # we'll determine file type using the extension only.
+        try:
+            import magic
+        except ImportError:
+            pass
+
         # if the file path is to a directory, assume it is a collection of
         # musedata parts
         useFormat = None
         if os.path.isdir(fp):
             useFormat = 'musedata'
-        elif 'posix' == os.name:
-            # Use the "file" program to get the file's mimetype, which allows more accurate guesses
-            # of the filetype.
-            try:
-                fileResult = check_output(['file', '--brief', '--mime-type', fp])
-            except (OSError, CalledProcessError):
-                # This means the "file" command wasn't found, or the return code was non-zero. We
-                # can just 'break' and fall back to the old-style check below.
-                fileResult = None
-
+        elif magic:
+            environLocal.printDebug('Using "python-magic" for file type detection')
+            mimeType = magic.from_file(fp, mime=True)
             if six.PY3:
-                fileResult = fileResult.decode('utf-8', 'ignore')
-            fileResult = fileResult.strip()  # remove trailing newline
+                mimeType = mimeType.decode('utf-8', 'ignore')
             extension = fp.split('.')[-1]  # get file extension
 
-            if 'application/xml' == fileResult:
+            if 'application/xml' == mimeType:
                 # MusicXML or MEI
                 if extension == 'mei':
                     useFormat = 'mei'
                 elif extension == 'xml':
                     useFormat = 'musicxml'
-            elif 'application/zip' == fileResult:
+            elif 'application/zip' == mimeType:
                 # compressed MusicXML, MuseData, or capella
                 if extension == 'mxl':
                     useFormat = 'musicxml'
@@ -472,7 +472,7 @@ class Converter(object):
                     useFormat = 'capella'
                 elif extension == 'zip':  # close our eyes and hope
                     useFormat = 'musedata'
-            elif 'text/plain' == fileResult:
+            elif 'text/plain' == mimeType:
                 # **kern, MuseData, NWCTXT, or abc
                 if extension == 'krn':
                     useFormat = 'humdrum'
@@ -482,24 +482,24 @@ class Converter(object):
                     useFormat = 'noteworthytext'
                 elif extension == 'abc':
                     useFormat = 'abc'
-            elif 'audio/midi' == fileResult:
+            elif 'audio/midi' == mimeType:
                 # MIDI; since we have full detection already, we don't need to check file extension
                 useFormat = 'midi'
-            elif 'application/octet-stream' == fileResult:
+            elif 'application/octet-stream' == mimeType:
                 # NoteWorthyComposer binary
                 if extension == 'nwc':
                     useFormat = 'noteworthy'
 
             # detection with "file" failed, so it's not a valid file(type)
             if useFormat is None:
-                raise ConverterFileException('Cannot determine filetype for "{}" (MIMEtype is {}; extension is {})'.format(fp, fileResult, extension))
+                raise ConverterFileException('Cannot determine file type for "{}" (MIMEtype is {}; extension is {})'.format(fp, mimeType, extension))
 
         else:
             # we have to fall back to legacy filetype detection
-            environLocal.warn('Falling back to legacy filetype detection')
+            environLocal.printDebug('Using only extension for file type detection')
             useFormat = common.findFormatFile(fp)
             if useFormat is None:
-                raise ConverterFileException('Cannot determine filetype for "{}"'.format(fp))
+                raise ConverterFileException('Cannot determine file type for "{}"'.format(fp))
 
         return useFormat
     
